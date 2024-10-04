@@ -1,5 +1,6 @@
 import streamlit as st
 
+# Hide sidebar navigation items
 st.markdown(
     """
     <style>
@@ -11,7 +12,8 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.page_link("rag_app.py", label="Home")
+    st.page_link("rag_app.py", label="Home")  # This assumes rag_app.py is your main app
+    st.page_link("pages/information.py", label="Bakery Information")  # Adjusted to include pages/
     st.page_link("pages/profile.py", label="Profile")
 
-st.write("hello")
+st.write("Hello, welcome to the main application!")

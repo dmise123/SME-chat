@@ -1,33 +1,42 @@
 import streamlit as st
+import pandas as pd
+import os
 from llama_index.llms.ollama import Ollama
 from pathlib import Path
-import qdrant_client
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings, PromptTemplate
-from llama_index.core.storage.storage_context import StorageContext
-from llama_index.vector_stores.qdrant import QdrantVectorStore
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
-
 from llama_index.core.llms import ChatMessage
 from llama_index.core.storage.chat_store import SimpleChatStore
 from llama_index.core.memory import ChatMemoryBuffer
-from llama_index.core.retrievers import VectorIndexRetriever
-from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.core.response_synthesizers import get_response_synthesizer
-
-from llama_index.core.node_parser import HierarchicalNodeParser, get_leaf_nodes, get_root_nodes
-from llama_index.core.storage.docstore import SimpleDocumentStore
 from llama_index.core.chat_engine import CondensePlusContextChatEngine
 
 
+# Function to save order to CSV
+def save_order(order_data):
+    order_csv_path = "order/order.csv"
+    order_df = pd.DataFrame(order_data)
+    if os.path.exists(order_csv_path):
+        order_df.to_csv(order_csv_path, mode='a', header=False, index=False)
+    else:
+        order_df.to_csv(order_csv_path, index=False)
 
-# CONTEXT_PROMPT = """You are an expert system with knowledge of interview questions.
-# These are documents that may be relevant to user question:\n\n
-# {context_str}
-# If you deem this piece of information is relevant, you may use it to answer user. 
-# Else then you can say that you DON'T KNOW."""
 
-# CONDENSE_PROMPT = """
-# """
+# Function to process order based on user input and bakery menu
+def process_order(user_input, bakery_data):
+    ordered_items = []
+    total_price = 0
+
+    # Tokenize user input and match it with available bakery items
+    for _, row in bakery_data.iterrows():
+        item_name = row["Item"].lower()
+        if item_name in user_input.lower():
+            ordered_items.append({"Item": row["Item"], "Price": row["Price"]})
+            total_price += row["Price"]
+
+    if ordered_items:
+        return ordered_items, total_price
+    return None, 0
+
 
 class Chatbot:
     def __init__(self, llm="llama3.1:latest", embedding_model="intfloat/multilingual-e5-large", vector_store=None):
@@ -42,22 +51,22 @@ class Chatbot:
         # Chat Engine
         self.chat_engine = self.create_chat_engine(self.index)
 
-    def set_setting(_arg, llm, embedding_model):
+    def set_setting(self, llm, embedding_model):
         Settings.llm = Ollama(model=llm, base_url="http://127.0.0.1:11434")
         Settings.embed_model = FastEmbedEmbedding(
             model_name=embedding_model, cache_dir="./fastembed_cache")
         Settings.system_prompt = """
-                                You are a multi-lingual expert system who has knowledge, based on 
-                                real-time data. You will always try to be helpful and try to help them 
-                                answering their question. If you don't know the answer, say that you DON'T
-                                KNOW.
+                                You are a bakery customer service assistant. 
+                                You will help customers with product inquiries, order status, promotions, 
+                                and other general bakery-related questions. 
+                                If you don't know the answer, politely let the customer know.
                                 """
 
         return Settings
 
     @st.cache_resource(show_spinner=False)
-    def load_data(_arg, vector_store=None):
-        with st.spinner(text="Loading and indexing – hang tight! This should take a few minutes."):
+    def load_data(_self, vector_store=None):
+        with st.spinner(text="Loading bakery-related documents..."):
             # Read & load document from folder
             reader = SimpleDirectoryReader(input_dir="./docs", recursive=True)
             documents = reader.load_data()
@@ -81,23 +90,22 @@ class Chatbot:
             retriever=index.as_retriever(),
             llm=Settings.llm
         )
-        # return index.as_chat_engine(chat_mode="condense_plus_context", chat_store_key="chat_history", memory=self.memory, verbose=True)
-
-
 
 
 # Main Program
-st.title("Simple RAG Chatbot with Streamlit")
+st.title("Bakery Customer Service Chatbot")
 chatbot = Chatbot()
+
+# Load bakery data from CSV
+bakery_data_path = "docs/data.csv"
+bakery_data = pd.read_csv(bakery_data_path)
 
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant",
-         "content": "Hello there 👋!\n\n Good to see you, how may I help you today? Feel free to ask me 😁"}
+         "content": "Hello there 👋!\n\n Good to see you, Welcome to our Bakery! How can I assist you today? Feel free to ask me 😁"}
     ]
-
-print(chatbot.chat_store.store)
 
 # Display chat messages from history on app rerun
 for message in st.session_state.messages:
@@ -107,13 +115,6 @@ for message in st.session_state.messages:
 chatbot.set_chat_history(st.session_state.messages)
 
 # React to user input
-# if prompt := st.chat_input("What is up?"):
-#     # Display user message in chat message container
-#     with st.chat_message("user"):
-#         st.markdown(prompt)
-#     # Add user message to chat history
-#     st.session_state.messages.append({"role": "user", "content": prompt})
-
 if prompt := st.chat_input("What is up?"):
     # Display user message in chat message container
     with st.chat_message("user"):
@@ -122,10 +123,28 @@ if prompt := st.chat_input("What is up?"):
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    with st.chat_message("assistant"):
-        response = chatbot.chat_engine.chat(prompt)
-        st.markdown(response.response)
+    # Process order based on user input
+    ordered_items, total_price = process_order(prompt, bakery_data)
 
-    # Add user message to chat history
+    # Respond based on whether items were found in the bakery menu
+    if ordered_items:
+        response_content = f"Your order:\n\n"
+        for item in ordered_items:
+            response_content += f"- {item['Item']}: ${item['Price']}\n"
+        response_content += f"\nTotal: ${total_price:.2f}"
+
+        # Save order to CSV
+        save_order(ordered_items)
+
+    else:
+        # Call the chatbot's response engine if it's not an order
+        response = chatbot.chat_engine.chat(prompt)
+        response_content = response.response
+
+    # Display assistant's response
+    with st.chat_message("assistant"):
+        st.markdown(response_content)
+
+    # Add assistant message to chat history
     st.session_state.messages.append(
-        {"role": "assistant", "content": response.response})
+        {"role": "assistant", "content": response_content})
